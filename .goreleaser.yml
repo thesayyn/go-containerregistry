@@ -74,6 +74,11 @@ changelog:
     - '^docs:'
     - '^test:'
 release:
+  draft: true
+  github:
+    owner: thesayyn
+    name: go-containerregistry
+
   footer: |
     ### Container Images
 
