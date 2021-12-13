@@ -15,11 +15,9 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/spf13/cobra"
@@ -36,24 +34,14 @@ func NewCmdMutate(options *[]crane.Option) *cobra.Command {
 	mutateCmd := &cobra.Command{
 		Use:   "mutate",
 		Short: "Modify image labels and annotations. The container must be pushed to a registry, and the manifest is updated there.",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			// Pull image and get config.
-			ref := args[0]
+			tarPath := args[0]
 
-			if len(annotations) != 0 {
-				desc, err := crane.Head(ref, *options...)
-				if err != nil {
-					return err
-				}
-				if desc.MediaType.IsIndex() {
-					return errors.New("mutating annotations on an index is not yet supported")
-				}
-			}
-
-			img, err := crane.Pull(ref, *options...)
+			img, err := crane.Load(tarPath, *options...)
 			if err != nil {
-				return fmt.Errorf("pulling %s: %w", ref, err)
+				return fmt.Errorf("loading %s: %w", tarPath, err)
 			}
 			cfg, err := img.ConfigFile()
 			if err != nil {
@@ -102,23 +90,16 @@ func NewCmdMutate(options *[]crane.Option) *cobra.Command {
 			// another crane command), then strip that and push the
 			// mutated image by digest instead.
 			if newRef == "" {
-				newRef = ref
+				newRef = tarPath
 			}
 			digest, err := img.Digest()
 			if err != nil {
 				return fmt.Errorf("digesting new image: %w", err)
 			}
-			r, err := name.ParseReference(newRef)
-			if err != nil {
-				return fmt.Errorf("parsing %s: %w", newRef, err)
-			}
-			if _, ok := r.(name.Digest); ok {
-				newRef = r.Context().Digest(digest.String()).String()
-			}
-			if err := crane.Push(img, newRef, *options...); err != nil {
+			if err := crane.Save(img, digest.String(), args[1]); err != nil {
 				return fmt.Errorf("pushing %s: %w", newRef, err)
 			}
-			fmt.Println(r.Context().Digest(digest.String()))
+			fmt.Println(digest.String())
 			return nil
 		},
 	}
