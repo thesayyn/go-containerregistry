@@ -34,35 +34,50 @@ func NewCmdMutate(options *[]crane.Option) *cobra.Command {
 	var envVars map[string]string
 	var newLayers []string
 
-	var newRef string
+	var newRef, outFile string
 
 	mutateCmd := &cobra.Command{
 		Use:   "mutate",
 		Short: "Modify image labels and annotations. The container must be pushed to a registry, and the manifest is updated there.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			var img v1.Image
+
 			// Pull image and get config.
 			ref := args[0]
 
-			if len(annotations) != 0 {
-				desc, err := crane.Head(ref, *options...)
+			// probably there is a better way to distinguish tarballs, mimeType etc..
+			if strings.Index(ref, ".tar") != -1 || strings.Index(ref, ".tar.gz") != -1 {
+				loadedImage, err := crane.Load(ref)
 				if err != nil {
-					return err
+					return fmt.Errorf("loading %s: %w", ref, err)
 				}
-				if desc.MediaType.IsIndex() {
-					return errors.New("mutating annotations on an index is not yet supported")
+				img = loadedImage
+			} else {
+				if len(annotations) != 0 {
+					desc, err := crane.Head(ref, *options...)
+					if err != nil {
+						return err
+					}
+					if desc.MediaType.IsIndex() {
+						return errors.New("mutating annotations on an index is not yet supported")
+					}
 				}
+
+				pulledImage, err := crane.Pull(ref, *options...)
+				if err != nil {
+					return fmt.Errorf("pulling %s: %w", ref, err)
+				}
+
+				img = pulledImage
 			}
 
-			img, err := crane.Pull(ref, *options...)
-			if err != nil {
-				return fmt.Errorf("pulling %s: %w", ref, err)
-			}
 			if len(newLayers) != 0 {
-				img, err = crane.Append(img, newLayers...)
+				newImage, err := crane.Append(img, newLayers...)
 				if err != nil {
 					return fmt.Errorf("appending %v: %w", newLayers, err)
 				}
+				img = newImage
 			}
 			cfg, err := img.ConfigFile()
 			if err != nil {
@@ -129,8 +144,15 @@ func NewCmdMutate(options *[]crane.Option) *cobra.Command {
 			if _, ok := r.(name.Digest); ok {
 				newRef = r.Context().Digest(digest.String()).String()
 			}
-			if err := crane.Push(img, newRef, *options...); err != nil {
-				return fmt.Errorf("pushing %s: %w", newRef, err)
+
+			if outFile != "" {
+				if err := crane.Save(img, newRef, outFile); err != nil {
+					return fmt.Errorf("writing output %s: %w", newRef, err)
+				}
+			} else {
+				if err := crane.Push(img, newRef, *options...); err != nil {
+					return fmt.Errorf("pushing %s: %w", newRef, err)
+				}
 			}
 			fmt.Println(r.Context().Digest(digest.String()))
 			return nil
@@ -141,6 +163,7 @@ func NewCmdMutate(options *[]crane.Option) *cobra.Command {
 	mutateCmd.Flags().StringToStringVarP(&envVars, "env", "e", nil, "New envvar to add")
 	mutateCmd.Flags().StringSliceVar(&entrypoint, "entrypoint", nil, "New entrypoint to set")
 	mutateCmd.Flags().StringSliceVar(&cmd, "cmd", nil, "New cmd to set")
+	appendCmd.Flags().StringVarP(&outFile, "output", "o", "", "Path to new tarball of resulting image")
 	mutateCmd.Flags().StringVarP(&newRef, "tag", "t", "", "New tag to apply to mutated image. If not provided, push by digest to the original image repository.")
 	mutateCmd.Flags().StringSliceVar(&newLayers, "append", []string{}, "Path to tarball to append to image")
 	return mutateCmd
